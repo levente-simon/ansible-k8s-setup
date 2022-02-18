@@ -1,0 +1,50 @@
+---
+- name: Create service account for gitlab-runner
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: sa-gl-runner
+        namespace: {{ project.name + '-mgmt' }}
+      imagePullSecrets:
+      - name: regcred
+      EOF
+
+- name: Create role for gitlab-runner
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      kind: Role
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      metadata:
+        name: role-gl-runner
+        namespace: {{ project.name + '-mgmt' }}
+      rules:
+      - apiGroups: [""]
+        resources: ["pods"]
+        verbs: ["list"]
+      - apiGroups: [""]
+        resources: ["pods/portforward"]
+        verbs: ["create"]
+      EOF
+
+- name: Create role binding for gitlab-runner
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      kind: RoleBinding
+      metadata:
+        name: rb-gl-runner
+        namespace: {{ project.name + '-mgmt' }}
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: role-gl-runner
+      subjects:
+      - kind: ServiceAccount
+        name: sa-gl-runner
+        namespace: {{ project.name + '-mgmt' }}
+      EOF

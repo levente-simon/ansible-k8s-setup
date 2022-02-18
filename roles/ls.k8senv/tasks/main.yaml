@@ -1,0 +1,60 @@
+---
+- name: Include tasks for helm install
+  include_tasks: "install-helm.yaml"
+
+- name: Include tasks for infrastucture 
+  include_tasks: "infra.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+
+- name: Include tasks for dashboard
+  include_tasks: "dashboard.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+
+- name: Include tasks for namespace creation
+  include_tasks: "namespace.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for tiller serviceacount creation
+  include_tasks: "sa-tiller.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for helm init
+  include_tasks: "init-helm.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for certifications
+  include_tasks: "certs.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for gitlab-runner serviceacount creation
+  include_tasks: "sa-gl-runner.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for gitlab-runner
+  include_tasks: "gitlab-runner.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project
+
+- name: Include tasks for ingress
+  include_tasks: "ingress.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  loop: "{{ projects | default([]) }}"
+  loop_control:
+    loop_var: project

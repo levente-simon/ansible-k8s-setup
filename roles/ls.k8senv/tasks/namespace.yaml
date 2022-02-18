@@ -1,0 +1,88 @@
+---
+- name: Label kube-system namespace with its name
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  shell: kubectl label namespaces/kube-system name=kube-system --overwrite
+
+- name: Create namespaces
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: {{ project.name + '-' + item.name }}
+        labels:
+          environment: {{ project.environment | default('test')}}
+          name: {{ item.name }}
+          project: {{ project.name }}
+      {% if item.label is defined %}
+      {% for label in item.labels %}{% if label.key is defined and label.value is defined %}
+            {{ label.key }}: {{ label.value }}
+        {% endif %}{% endfor %}
+      {% endif %}
+      {% if item.name == 'mgmt' %}
+          ns-role: mgmt
+      {% endif %}
+      {% if item.name == 'ingress' %}
+          ns-role: ingress
+      {% endif %}
+      EOF
+  with_items: 
+    "{{ project.namespaces + [{'name': 'mgmt'}, {'name': 'ingress' }] | default([]) }}"
+
+- name: Apply default deny but management network policy
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: np-default
+        namespace: {{project.name + '-' + item.name }}
+      spec:
+        podSelector: {}
+        policyTypes:
+        - Ingress
+        - Egress
+        egress:
+        - to:
+          - namespaceSelector:
+              matchLabels:
+                name: kube-system
+          ports:
+          - port: 53
+            protocol: TCP
+          - port: 53
+            protocol: UDP
+      EOF
+  with_items:
+    "{{ project.namespaces + [{'name': 'mgmt'}, {'name': 'ingress' }] | default([]) }}"
+
+- name: Create service registry credential
+  shell: 
+    cmd: |
+      kubectl create secret \
+      docker-registry regcred \
+      --docker-server={{ docker_registry_url }} \
+      --docker-email={{ docker_registry_email }} \
+      --docker-username={{ docker_registry_username }} \
+      --docker-password={{ docker_registry_token }} \
+      --namespace {{project.name + '-' + item.name }} \
+      --dry-run -o yaml | kubectl apply -f -
+  with_items:
+    "{{ project.namespaces + [{'name': 'mgmt'}, {'name': 'ingress' }] | default([]) }}"
+
+- name: Add image pull credential to default service account
+  shell: 
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: default
+        namespace: {{project.name + '-' + item.name }}
+      imagePullSecrets:
+      - name: regcred
+      EOF
+  with_items:
+    "{{ project.namespaces + [{'name': 'mgmt'}, {'name': 'ingress' }] | default([]) }}"

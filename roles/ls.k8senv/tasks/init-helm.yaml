@@ -1,0 +1,29 @@
+---
+- name: Apply network policy for tiller
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: np-tiller
+        namespace: {{ project.name + '-mgmt' }}
+      spec:
+        podSelector:
+          matchLabels:
+            app: helm
+            name: tiller
+        policyTypes:
+        - Ingress
+        - Egress
+        ingress:
+        - from:
+          - namespaceSelector:
+              matchLabels:
+                tiller-access: enabled
+        egress:
+        - {}
+      EOF
+
+- name: init helm
+  shell: /usr/local/bin/helm init --skip-refresh --tiller-namespace {{ project.name + '-mgmt' }} --service-account sa-tiller

@@ -1,0 +1,260 @@
+--- 
+- name: get apiserver ip addresses
+  shell: "kubectl get pod -n kube-system -o wide |  awk '/apiserver/{print $6}'"
+  register: apiservers
+
+- name: Apply network policy for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: np-dashboard
+        namespace: infra-fe
+      spec:
+        podSelector:
+          matchLabels:
+            app: gitlab-runner
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+      {% for ip in apiservers.stdout_lines %}
+          - ipBlock:
+              cidr: {{ ip }}/32
+      {% endfor %}
+          ports:
+          - port: 6443
+            protocol: TCP
+      EOF
+
+- name: Create Secret for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        labels:
+          app: kubernetes-dashboard
+        name: kubernetes-dashboard
+        namespace: infra-fe
+      type: Opaque
+      EOF
+
+- name: Create service account for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        labels:
+          app: kubernetes-dashboard
+        name: sa-kubernetes-dashboard
+        namespace: infra-fe
+      EOF
+
+- name: Create role for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      kind: Role
+      metadata:
+        labels:
+          app: kubernetes-dashboard
+        name: role-kubernetes-dashboard
+        namespace: infra-fe
+      rules:
+        # Allow Dashboard to create 'kubernetes-dashboard-key-holder' secret.
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        verbs:
+          - create
+
+        # Allow Dashboard to create 'kubernetes-dashboard-settings' config map.
+      - apiGroups:
+          - ""
+        resources:
+          - configmaps
+        verbs:
+          - create
+
+        # Allow Dashboard to get, update and delete Dashboard exclusive secrets.
+      - apiGroups:
+          - ""
+        resources:
+          - secrets
+        resourceNames:
+          - kubernetes-dashboard-key-holder
+          - kubernetes-dashboard
+        verbs:
+          - get
+          - update
+          - delete
+
+        # Allow Dashboard to get and update 'kubernetes-dashboard-settings' config map.
+      - apiGroups:
+          - ""
+        resources:
+          - configmaps
+        resourceNames:
+          - kubernetes-dashboard-settings
+        verbs:
+          - get
+          - update
+
+        # Allow Dashboard to get metrics from heapster.
+      - apiGroups:
+          - ""
+        resources:
+          - services
+        resourceNames:
+          - heapster
+        verbs:
+          - proxy
+      - apiGroups:
+          - ""
+        resources:
+          - services/proxy
+        resourceNames:
+          - heapster
+          - "http:heapster:"
+          - "https:heapster:"
+        verbs:
+          - get
+      EOF
+
+- name: Create role binding for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      kind: RoleBinding
+      metadata:
+        labels:
+          app: kubernetes-dashboard
+        name: rb-kubernetes-dashboard
+        namespace: infra-fe
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: Role
+        name: role-kubernetes-dashboard
+      subjects:
+        - kind: ServiceAccount
+          name: sa-kubernetes-dashboard
+          namespace: infra-fe
+      EOF
+
+- name: Create service for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: kubernetes-dashboard
+        labels:
+          app: kubernetes-dashboard
+          kubernetes.io/cluster-service: "true"
+        namespace: infra-fe
+      spec:
+        type: ClusterIP
+        ports:
+        - port: 443
+          targetPort: https
+        selector:
+          app: kubernetes-dashboard
+          release: kubernetes-dashboard
+      EOF
+
+- name: Create deployment for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: extensions/v1beta1
+      kind: Deployment
+      metadata:
+        name: kubernetes-dashboard
+        labels:
+          app: kubernetes-dashboard
+          kubernetes.io/cluster-service: "true"
+        namespace: infra-fe
+      spec:
+        replicas: 1
+        strategy:
+          rollingUpdate:
+            maxSurge: 0
+            maxUnavailable: 1
+          type: RollingUpdate
+        template:
+          metadata:
+            labels:
+              app: kubernetes-dashboard
+              release: kubernetes-dashboard
+              kubernetes.io/cluster-service: "true"
+          spec:
+            serviceAccountName: sa-kubernetes-dashboard
+            containers:
+            - name: kubernetes-dashboard
+              image: "k8s.gcr.io/kubernetes-dashboard-amd64:v1.10.0"
+              imagePullPolicy: IfNotPresent
+              args:
+                - --auto-generate-certificates
+              ports:
+              - name: https
+                containerPort: 8443
+                protocol: TCP
+              volumeMounts:
+              - name: kubernetes-dashboard-certs
+                mountPath: /certs
+                # Create on-disk volume to store exec logs
+              - mountPath: /tmp
+                name: tmp-volume
+              livenessProbe:
+                httpGet:
+                  scheme: HTTPS
+                  path: /
+                  port: 8443
+                initialDelaySeconds: 30
+                timeoutSeconds: 30
+              resources:
+                limits:
+                  cpu: 100m
+                  memory: 100Mi
+                requests:
+                  cpu: 100m
+                  memory: 100Mi
+                
+            volumes:
+            - name: kubernetes-dashboard-certs
+              secret:
+                secretName: kubernetes-dashboard
+            - name: tmp-volume
+              emptyDir: {}
+      EOF
+
+- name: Create Ingress for dashboard
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: extensions/v1beta1
+      kind: Ingress
+      metadata:
+        name: kubernetes-dashboard
+        labels:
+          app: kubernetes-dashboard
+        namespace: infra-fe
+      spec:
+        rules:
+          - http:
+              paths:
+                - path: /
+                  backend:
+                    serviceName: kubernetes-dashboard
+                    servicePort: 443
+      EOF

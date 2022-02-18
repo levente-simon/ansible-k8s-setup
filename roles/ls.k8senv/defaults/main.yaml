@@ -1,0 +1,11 @@
+helm_url: "https://iac-nexus.corp/repository/kubernetes/helm/v2.10.0/helm"
+
+docker_registry_url: "https://iac-registry.corp"
+
+default_gitlab_url: "https://iac-gitlab.corp/"
+default_gitlab_net: 10.229.230.0/27
+default_gitlab_port: 443
+
+# docker_registry_email: 
+# docker_registry_username: 
+# docker_registry_token: 

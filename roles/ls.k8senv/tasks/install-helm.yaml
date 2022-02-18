@@ -1,0 +1,11 @@
+---
+- name: Label kube-system namespace to allow tiller access
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  shell: kubectl label namespaces/kube-system tiller-access=enabled --overwrite
+
+- name: fetch helm
+  get_url:
+    url: "{{ helm_url }}"
+    dest: /usr/local/bin/helm
+    mode: 755
+  when: ansible_os_family == 'RedHat' or ansible_os_family == 'Debian' 

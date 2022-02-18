@@ -1,0 +1,5 @@
+---
+- name: setup k8s environment
+  hosts: kube-cluster-conf
+  roles:
+    - role: ls.k8senv

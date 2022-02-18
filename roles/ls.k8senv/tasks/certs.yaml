@@ -1,0 +1,8 @@
+---
+- name: copy certificate to remote
+  copy:
+    src: files/iac-gitlab.corp.crt
+    dest: /tmp/iac-gitlab.corp.crt
+
+- name: add iac-gitlab-cert as secret
+  shell: kubectl create secret generic iac-gitlab-cert -n {{ project.name + '-mgmt' }} --from-file=/tmp/iac-gitlab.corp.crt --dry-run -o yaml | kubectl apply -f -

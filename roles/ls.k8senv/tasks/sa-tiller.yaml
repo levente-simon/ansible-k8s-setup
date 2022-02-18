@@ -1,0 +1,51 @@
+---
+- name: Create service account for tiller
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: sa-tiller
+        namespace: {{ project.name + '-mgmt' }}
+      EOF
+
+- name: Create tiller-manager role
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      kind: Role
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      metadata:
+        name: role-tiller
+        namespace: {{project.name + '-' + item.name }}
+      rules:
+      - apiGroups: ["", "batch", "extensions", "apps"]
+        resources: ["*"]
+        verbs: ["*"]
+      EOF
+  with_items:
+    "{{ project.namespaces + [{'name': 'mgmt' }] | default([]) }}"
+
+- name: Create rolebinding for tiller
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      kind: RoleBinding
+      apiVersion: rbac.authorization.k8s.io/v1beta1
+      metadata:
+        name: rb-tiller
+        namespace: {{project.name + '-' + item.name }}
+      subjects:
+      - kind: ServiceAccount
+        name: sa-tiller
+        namespace: {{ project.name + '-mgmt' }}
+      roleRef:
+        kind: Role
+        name: role-tiller
+        apiGroup: rbac.authorization.k8s.io
+      EOF
+  with_items:
+    "{{ project.namespaces + [{'name': 'mgmt' }] | default([]) }}"
+  
+  

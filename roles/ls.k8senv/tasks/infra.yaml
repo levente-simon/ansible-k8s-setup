@@ -1,0 +1,24 @@
+- name: Include tasks for namespace creation
+  include_tasks: "namespace.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  vars:
+    project:
+      name: infra
+      namespaces:
+      - name: fe
+        labels:
+        - key: ns-role
+          value: frontend
+
+- name: Include tasks for infra-ingress
+  include_tasks: "ingress.yaml"
+  when: "inventory_hostname == groups['kube-cluster-conf'][0]"
+  vars:
+    project:
+      name: infra
+      ingress:
+        enabled: true
+        namespace: fe
+        nodeport_http: 30001
+        nodeport_https: 30002
+

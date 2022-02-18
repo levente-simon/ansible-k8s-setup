@@ -1,0 +1,218 @@
+---
+- name: set runner
+  set_fact:
+    runner: "{{ project.runner | default([]) }}"
+
+- name: set registration token
+  set_fact:
+    registration_token: "{{ runner.registration_token | default() }}"
+  when: runner is defined
+
+- name: set runner token
+  set_fact:
+    runner_token: "{{ runner.runner_token | default() }}"
+  when: runner is defined
+
+- name: get apiserver ip addresses
+  shell: "kubectl get pod -n kube-system -o wide |  awk '/apiserver/{print $6}'"
+  register: apiservers
+
+- name: Apply network policy for gitlab-runner
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: np-gitlab-runner
+        namespace: {{ project.name + '-mgmt' }}
+      spec:
+        podSelector:
+          matchLabels:
+            app: gitlab-runner
+        policyTypes:
+        - Egress
+        egress:
+        - to:
+      {% for ip in apiservers.stdout_lines %}
+          - ipBlock:
+              cidr: {{ ip }}/32
+      {% endfor %}
+          ports:
+          - port: 6443
+            protocol: TCP
+        - to:
+          - ipBlock:
+              cidr: {{ runner.gitlab_net | default(default_gitlab_net) }}
+          ports:
+          - protocol: TCP
+            port: {{ runner.gitlab_port | default(default_gitlab_port) }}
+      EOF
+  when: registration_token is defined and registration_token != ''
+
+- name: Add registration token as secret
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: gitlab-runner-secret
+        namespace: {{ project.name + '-mgmt' }}
+        labels:
+          app: gitlab-runner
+      type: Opaque
+      data:
+        runner-registration-token: {{ registration_token | b64encode }}
+        # runner-token: {{ runner_token | b64encode }}
+      EOF
+  when: registration_token is defined and registration_token != ''
+
+- name: Add gitlab-runner configmap 
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: gitlab-runner-configmap
+        namespace: {{ project.name + '-mgmt' }}
+        labels:
+          app: gitlab-runner
+      data:
+        entrypoint: |
+          set -e
+          mkdir -p /home/gitlab-runner/.gitlab-runner/
+          cp /scripts/config.toml /home/gitlab-runner/.gitlab-runner/
+
+          # Register the runner
+          if [[ -f /secrets/runner-registration-token ]]; then
+            export REGISTRATION_TOKEN=\$(cat /secrets/runner-registration-token)
+          fi
+
+          if [[ -f /secrets/runner-token ]]; then
+            export CI_SERVER_TOKEN=$(cat /secrets/runner-token)
+          fi
+          /entrypoint register --non-interactive 
+
+          # Start the runner
+          /entrypoint run --user=gitlab-runner --working-directory=/home/gitlab-runner
+        config.toml: |
+          concurrent = 10
+          check_interval = 30
+          log_level = "info"
+          metrics_server = '[::]:9252'
+        configure: |
+          set -e
+          cp /init-secrets/* /secrets
+          ls -al /secrets
+      EOF
+  when: registration_token is defined and registration_token != ''
+
+- name: Add gitlab-runner depolyment
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: extensions/v1beta1
+      kind: Deployment
+      metadata:
+        name: gitlab-runner
+        namespace: {{ project.name + '-mgmt' }}
+        labels:
+          app: gitlab-runner
+      spec:
+        replicas: 1
+        template:
+          metadata:
+            labels:
+              app: gitlab-runner
+            annotations:
+              prometheus.io/scrape: 'true'
+              prometheus.io/port: '9252'
+          spec:
+            securityContext:
+              runAsUser: 100
+              fsGroup: 65533
+            initContainers:
+              - name: configure
+                command: ['sh', '/config/configure']
+                image: busybox:latest
+                volumeMounts:
+                - name: runner-secrets
+                  mountPath: /secrets
+                  readOnly: false
+                - name: scripts
+                  mountPath: /config
+                  readOnly: true
+                - name: init-runner-secrets
+                  mountPath: /init-secrets
+                  readOnly: true
+            serviceAccountName: sa-gl-runner
+            containers:
+            - name: gitlab-runner
+              image: iac-registry.corp/cinf/os/gitlab-runner:11.0.0
+              lifecycle:
+                preStop:
+                  exec:
+                    command: ["gitlab-runner", "unregister", "--all-runners"]
+              imagePullPolicy: Always
+              command: ["/bin/bash", "/scripts/entrypoint"]
+              env:
+              - name: CI_SERVER_URL
+                value: {{ runner.gitlab_url | default(default_gitlab_url )}}
+              - name: CLONE_URL
+              - name: RUNNER_EXECUTOR
+                value: shell
+              - name: REGISTER_LOCKED
+                value: "true"
+              - name: RUNNER_TAG_LIST
+                value: {{ 'deploy,' + project.name + ',' + project.environment | default('test') }}
+              livenessProbe:
+                exec:
+                  command: ["/usr/bin/pgrep","gitlab.*runner"]
+                initialDelaySeconds: 60
+                timeoutSeconds: 1
+                periodSeconds: 10
+                successThreshold: 1
+                failureThreshold: 3
+              readinessProbe:
+                exec:
+                  command: ["/usr/bin/pgrep","gitlab.*runner"]
+                initialDelaySeconds: 10
+                timeoutSeconds: 1
+                periodSeconds: 10
+                successThreshold: 1
+                failureThreshold: 3
+              ports:
+              - name: metrics
+                containerPort: 9252
+              volumeMounts:
+              - name: runner-secrets
+                mountPath: /secrets
+              - name: etc-gitlab-runner
+                mountPath: /home/gitlab-runner/.gitlab-runner
+              - name: scripts
+                mountPath: /scripts
+              resources: {}
+            volumes:
+            - name: runner-secrets
+              emptyDir:
+                medium: "Memory"
+            - name: etc-gitlab-runner
+              emptyDir:
+                medium: "Memory"
+            - name: init-runner-secrets
+              projected:
+                sources:
+                  - secret:
+                      name: gitlab-runner-secret
+                      items:
+                        - key: runner-registration-token
+                          path: runner-registration-token
+                        # - key: runner-token
+                        #  path: runner-token
+            - name: scripts
+              configMap:
+                name: gitlab-runner-configmap
+      EOF
+  when: registration_token is defined and registration_token != ''
